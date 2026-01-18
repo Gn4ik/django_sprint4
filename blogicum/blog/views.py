@@ -35,13 +35,17 @@ def index(request):
 def post_detail(request, id):
     template = "blog/detail.html"
     current_time = timezone.now()
-    post = get_object_or_404(
-        Post,
-        pk=id,
-        is_published=True,
-        pub_date__lte=current_time,
-        category__is_published=True
-    )
+
+    current_user = request.user
+    post = get_object_or_404(Post, pk=id)
+    is_author = current_user.is_authenticated and post.author == current_user
+    is_published = (post.is_published and 
+                    post.pub_date <= current_time and 
+                    post.category.is_published)
+    
+    if not is_author and not is_published:
+        return render(request, 'pages/404.html', status=404)
+
     comments = Comment.objects.filter(post=post)
     form = None
     if request.user.is_authenticated:
@@ -70,7 +74,7 @@ def category_posts(request, category_slug):
         pub_date__lte=current_time,
         is_published=True).annotate(
         comment_count=Count('comments')
-        )
+        ).order_by('-pub_date')
     
     paginator = Paginator(posts, 10)
     page_number = request.GET.get('page')
@@ -234,14 +238,25 @@ class ProfileView(DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         
-        user = self.object
+        profile_user = self.object
+        current_user = self.request.user
         
-        posts = Post.objects.filter(
-            author=user,
-            is_published=True,
-            category__is_published=True
-        ).select_related('category', 'location').order_by('-pub_date').annotate(
-        comment_count=Count('comments')
+        is_owner = current_user.is_authenticated and current_user == profile_user
+        
+        if is_owner:
+            posts = Post.objects.filter(author=profile_user)
+        else:
+            posts = Post.objects.filter(
+                author=profile_user,
+                is_published=True,
+                category__is_published=True,
+                pub_date__lte=timezone.now()
+            )
+        
+        posts = posts.select_related('category', 'location').order_by(
+            '-pub_date'
+        ).annotate(
+            comment_count=Count('comments')
         )
         
         paginator = Paginator(posts, 10)
@@ -249,7 +264,7 @@ class ProfileView(DetailView):
         page_obj = paginator.get_page(page_number)
         
         context['page_obj'] = page_obj
-        context['posts'] = posts
+        context['posts'] = page_obj.object_list
         return context
 
 
